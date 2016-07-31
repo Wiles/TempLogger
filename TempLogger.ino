@@ -21,7 +21,7 @@ void setup() {
 
   pinMode(LED, OUTPUT);
   pinMode(BUTTON, INPUT_PULLUP);
-  
+
   EEPROM.begin(512);
   EEPROM.get(0, thingspeakKey);
   EEPROM.end();
@@ -52,7 +52,7 @@ void loop() {
   }
   float h = dht.readHumidity();
   float t = dht.readTemperature();
-  sendData(t, h);
+  sendData(t, h, humidex(t, dewPoint(t,h)));
   for (int i = 0; i < 60; ++i) {
     delay(1000);
     if (digitalRead(BUTTON) == LOW) {
@@ -61,8 +61,20 @@ void loop() {
   }
 }
 
-void sendData(float temp, float humidity) {
-  
+float dewPoint(float temp, float humidity) {     
+ // https://ag.arizona.edu/azmet/dewpoint.html
+
+  double b = (log(humidity / 100) + ((17.27 * temp) / (237.3 + temp))) / 17.27;
+  return (237.3 * b) / (1 - b);
+}
+
+float humidex(float temp, float dewPoint) {
+  double e = 19.833625 - 5417.753 /(273.16 + dewPoint);
+  double h = temp + 3.3941 * exp(e) - 5.555;
+  return h;
+}
+
+void sendData(float temp, float humidity, float humidex) {
   WiFiClient client;
   if (client.connect(thingspeakHost, httpPort)) {
     String url = "/update?key=";
@@ -71,6 +83,8 @@ void sendData(float temp, float humidity) {
     url += temp;
     url += "&field2=";
     url += humidity;
+    url += "&field3=";
+    url += humidex;
     
     client.print(String("GET ") +
       url +
