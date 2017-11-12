@@ -5,6 +5,8 @@
 #include <ESP8266WebServer.h>
 #include <WiFiManager.h>  // https://github.com/tzapu/WiFiManager v: 0.10.0
 
+#define READING_COUNT 3
+
 #define LED 4
 #define BUTTON 13
 #define DHTPIN 2
@@ -50,10 +52,20 @@ void loop() {
     wifiManager.autoConnect("TempLogger");
     digitalWrite(LED, LOW);
   }
-  float h = dht.readHumidity();
-  float t = dht.readTemperature();
+  float h = 0;
+  float t = 0;
+  for(int i = 0; i < READING_COUNT; ++i) {
+    delay(2000);
+  
+    h += dht.readHumidity();
+    t += dht.readTemperature();
+  }
+  
+  h /= READING_COUNT;
+  t /= READING_COUNT;
+  
   sendData(t, h, humidex(t, dewPoint(t,h)));
-  for (int i = 0; i < 60; ++i) {
+  for (int i = 0; i < (60 - READING_COUNT * 2); ++i) {
     delay(1000);
     if (digitalRead(BUTTON) == LOW) {
       break;
