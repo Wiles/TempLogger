@@ -30,3 +30,4 @@ _autosave-*
 *.gto
 *.gtl
 *.drl
+gerber/
