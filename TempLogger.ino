@@ -1,39 +1,52 @@
 #include <EEPROM.h>
-#include <DHT.h>          // https://github.com/adafruit/DHT-sensor-library v: 1.2.3
+#include "ClosedCube_HDC1080.h"
 #include <ESP8266WiFi.h>  // https://github.com/esp8266/Arduino v: 2.1.0
 #include <DNSServer.h>
 #include <ESP8266WebServer.h>
 #include <WiFiManager.h>  // https://github.com/tzapu/WiFiManager v: 0.10.0
 
-#define READING_COUNT 3
+#define STATUS_LED 5
+#define PULSE_LED 4
 
-#define LED 4
-#define BUTTON 13
-#define DHTPIN 2
-#define DHTTYPE DHT22
-DHT dht(DHTPIN, DHTTYPE);
+#define CONFIG_BUTTON 0
 
-const char* thingspeakHost = "184.106.153.149";
+#define SDA 13
+#define SCL 12
+
+struct reading {
+  float temp;
+  float humidity;
+};
+
+
+ClosedCube_HDC1080 hdc1080;
+
+//const char* thingspeakHost = "184.106.153.149";
+const char* thingspeakHost = "api.thingspeak.com";
 const int httpPort = 80;
 char thingspeakKey[40];
 
 WiFiManager wifiManager;
 
 void setup() {
-
-  pinMode(LED, OUTPUT);
-  pinMode(BUTTON, INPUT_PULLUP);
+  Serial.begin(115200);
+  pinMode(STATUS_LED, OUTPUT);
+  pinMode(PULSE_LED, OUTPUT);
+  digitalWrite(STATUS_LED, HIGH);
+  digitalWrite(PULSE_LED, HIGH);
 
   EEPROM.begin(512);
   EEPROM.get(0, thingspeakKey);
   EEPROM.end();
-  
-  WiFiManagerParameter param("Thingspeak", "thingspeak key", thingspeakKey, 40);
-  wifiManager.addParameter(&param);
 
-  digitalWrite(LED, HIGH);
+  Serial.println("Connecting...");
+  WiFiManagerParameter param("Thingspeak", "thingspeak key", thingspeakKey, 40);
+  wifiManager.addParameter(&param); 
+
+  digitalWrite(STATUS_LED, LOW);
   wifiManager.autoConnect("TempLogger");
-  digitalWrite(LED, LOW);
+  Serial.println("Connected");
+  digitalWrite(STATUS_LED, HIGH);
   
   strcpy(thingspeakKey, param.getValue());
   
@@ -41,52 +54,57 @@ void setup() {
   EEPROM.put(0, thingspeakKey);
   EEPROM.end();
   
-  dht.begin();
+  hdc1080.begin(0x40,SDA, SCL);
 }
+
+reading previousReading = {0, 0};
+
+float minTempDelta = 0.2;
+float minHumidityDelta = 1;
+int count = 0;
+int changeCount = 0;
+int idleCount = 0;
 
 void loop() {
-  if (digitalRead(BUTTON) == LOW) {
-    // startConfigPortal causes issues with custom parameter
-    wifiManager.resetSettings();
-    digitalWrite(LED, HIGH);
-    wifiManager.autoConnect("TempLogger");
-    digitalWrite(LED, LOW);
+  reading newReading = averageReading(60, 1000);
+  float humidex = calcHumidex(newReading.temp, newReading.humidity);
+
+  if ( idleCount == 10 ||
+    abs(newReading.temp - previousReading.temp) >= minTempDelta || 
+    abs(newReading.humidity - previousReading.humidity) >= minHumidityDelta
+  ) {
+    idleCount = 0;
+    sendData(newReading.temp, newReading.humidity, humidex);
+    previousReading = newReading;
+    ++changeCount;
+  } else {
+//    ++idleCount;
   }
-  float h = 0;
-  float t = 0;
-  for(int i = 0; i < READING_COUNT; ++i) {
-    delay(2000);
-  
-    h += dht.readHumidity();
-    t += dht.readTemperature();
-  }
-  
-  h /= READING_COUNT;
-  t /= READING_COUNT;
-  
-  sendData(t, h, humidex(t, dewPoint(t,h)));
-  for (int i = 0; i < (60 - READING_COUNT * 2); ++i) {
-    delay(1000);
-    if (digitalRead(BUTTON) == LOW) {
-      break;
-    }
-  }
+  ++count;
 }
 
-float dewPoint(float temp, float humidity) {     
+float calcDewPoint(float temp, float humidity) {     
  // https://ag.arizona.edu/azmet/dewpoint.html
 
   double b = (log(humidity / 100) + ((17.27 * temp) / (237.3 + temp))) / 17.27;
   return (237.3 * b) / (1 - b);
 }
 
-float humidex(float temp, float dewPoint) {
+float calcHumidex(float temp, float humidity) {
+  float dewPoint = calcDewPoint(temp, humidity);
   double e = 19.833625 - 5417.753 /(273.16 + dewPoint);
   double h = temp + 3.3941 * exp(e) - 5.555;
   return h;
 }
 
 void sendData(float temp, float humidity, float humidex) {
+  
+  Serial.print(temp);
+  Serial.print(" ");
+  Serial.print(humidity);
+  Serial.print(" ");
+  Serial.println(humidex);
+  
   WiFiClient client;
   if (client.connect(thingspeakHost, httpPort)) {
     String url = "/update?key=";
@@ -109,3 +127,20 @@ void sendData(float temp, float humidity, float humidex) {
   }
 }
     
+reading averageReading(int readings, int delayMS) {
+  double totalTemp = 0;
+  double totalHumidity = 0;
+
+  for (int i = 0; i < readings; ++i) {
+    if (i % 2 == 0) {
+      digitalWrite(PULSE_LED, LOW);
+    } else {
+      digitalWrite(PULSE_LED, HIGH);
+    }
+    totalTemp += hdc1080.readTemperature();
+    totalHumidity += hdc1080.readHumidity();
+    delay(delayMS);
+  }
+
+  return (reading) {totalTemp / readings, totalHumidity / readings};
+}
